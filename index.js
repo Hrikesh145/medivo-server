@@ -62,12 +62,13 @@ async function run() {
 
     // ── CAMPS ROUTES ──
 
-    // get all camps
+    // get all camps (with optional organizer filter)
     app.get("/camps", async (req, res) => {
-      const result = await campsCollection.find().toArray();
+      const { organizerEmail } = req.query;
+      const query = organizerEmail ? { organizerEmail } : {};
+      const result = await campsCollection.find(query).toArray();
       res.send(result);
     });
-
     // get single camp
     app.get("/camps/:id", async (req, res) => {
       const { id } = req.params;
@@ -81,6 +82,26 @@ async function run() {
       const camp = req.body;
       console.log("new camp →", camp);
       const result = await campsCollection.insertOne(camp);
+      res.send(result);
+    });
+
+    // update camp
+    app.patch("/camps/:id", async (req, res) => {
+      const { id } = req.params;
+      const updates = req.body;
+      const result = await campsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: updates },
+      );
+      res.send(result);
+    });
+
+    // delete camp
+    app.delete("/camps/:id", async (req, res) => {
+      const { id } = req.params;
+      const result = await campsCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
       res.send(result);
     });
 
