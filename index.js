@@ -161,11 +161,9 @@ async function run() {
     // CAMPS
     // ══════════════════════════════
 
-    // get all camps — public (optional organizer filter)
+    // get all camps — public
     app.get("/camps", async (req, res) => {
-      const { organizerEmail } = req.query;
-      const query = organizerEmail ? { organizerEmail } : {};
-      const result = await campsCollection.find(query).toArray();
+      const result = await campsCollection.find().toArray();
       res.send(result);
     });
 
@@ -245,19 +243,21 @@ async function run() {
       res.send(result);
     });
 
-    // MUST be before /registrations/:id
+
     // get registrations by organizer email
-    app.get("/registrations/organizer", verifyToken, async (req, res) => {
-      const { organizerEmail } = req.query;
-      if (req.user?.email !== organizerEmail) {
-        return res.status(403).send({ message: "Forbidden" });
-      }
-      const result = await registrationsCollection
-        .find({ organizerEmail })
-        .sort({ joinedAt: -1 })
-        .toArray();
-      res.send(result);
-    });
+    app.get(
+      "/registrations/organizer",
+      verifyToken,
+      verifyOrganizer,
+      async (req, res) => {
+        const result = await registrationsCollection
+          .find()
+          .sort({ joinedAt: -1 })
+          .toArray();
+
+        res.send(result);
+      },
+    );
 
     // get single registration by ID — /:id AFTER specific routes
     app.get("/registrations/:id", verifyToken, async (req, res) => {
