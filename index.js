@@ -47,7 +47,7 @@ async function run() {
   try {
     await client.connect();
 
-    // all collections 
+    // ── collections
     const usersCollection = client.db("medivoDb").collection("users");
     const campsCollection = client.db("medivoDb").collection("camps");
     const registrationsCollection = client
@@ -56,11 +56,11 @@ async function run() {
     const paymentsCollection = client.db("medivoDb").collection("payments");
     const feedbackCollection = client.db("medivoDb").collection("feedback");
 
-    // npm install stripe
+    // ── stripe
     const Stripe = require("stripe");
     const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
-    // ── verifyOrganizer INSIDE run() so it can access usersCollection
+    // ── verifyOrganizer — inside run() to access usersCollection
     const verifyOrganizer = async (req, res, next) => {
       const email = req.user?.email;
       const user = await usersCollection.findOne({ email });
@@ -75,10 +75,12 @@ async function run() {
     // ════════════════════════════════
 
     app.get("/", (req, res) => {
-      res.send("Medivo server running");
+      res.send("Medivo server running ✓");
     });
 
-    // ── USERS ──
+    // ══════════════════════════════
+    // USERS
+    // ══════════════════════════════
 
     // get all users
     app.get("/users", verifyToken, async (req, res) => {
@@ -113,7 +115,7 @@ async function run() {
       res.send({ role: user?.role || "user" });
     });
 
-    // set user role
+    // set user role — organizer only
     app.patch(
       "/users/role/:email",
       verifyToken,
@@ -129,9 +131,37 @@ async function run() {
       },
     );
 
-    // ── CAMPS ──
+    // update user profile (name, photo, phone, location)
+    app.patch("/users/profile/:email", verifyToken, async (req, res) => {
+      const { email } = req.params;
 
-    // get all camps (with optional organizer filter) — public
+      // only the owner can update their own profile
+      if (req.user?.email !== email) {
+        return res.status(403).send({ message: "Forbidden" });
+      }
+
+      const { name, photoURL, phone, location } = req.body;
+
+      const result = await usersCollection.updateOne(
+        { email },
+        {
+          $set: {
+            name,
+            photoURL,
+            phone,
+            location,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      );
+
+      res.send(result);
+    });
+    // ══════════════════════════════
+    // CAMPS
+    // ══════════════════════════════
+
+    // get all camps — public (optional organizer filter)
     app.get("/camps", async (req, res) => {
       const { organizerEmail } = req.query;
       const query = organizerEmail ? { organizerEmail } : {};
@@ -142,8 +172,7 @@ async function run() {
     // get single camp — public
     app.get("/camps/:id", async (req, res) => {
       const { id } = req.params;
-      const query = { _id: new ObjectId(id) };
-      const result = await campsCollection.findOne(query);
+      const result = await campsCollection.findOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
@@ -168,13 +197,11 @@ async function run() {
     // delete camp — organizer only
     app.delete("/camps/:id", verifyToken, verifyOrganizer, async (req, res) => {
       const { id } = req.params;
-      const result = await campsCollection.deleteOne({
-        _id: new ObjectId(id),
-      });
+      const result = await campsCollection.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
-    // join camp — any logged in user
+    // join camp — increment participantCount
     app.patch("/camps/:id/join", verifyToken, async (req, res) => {
       const { id } = req.params;
       const camp = await campsCollection.findOne({ _id: new ObjectId(id) });
@@ -189,9 +216,12 @@ async function run() {
       res.send(result);
     });
 
-    // ── REGISTRATIONS ──
+    // ══════════════════════════════
+    // REGISTRATIONS
+    // SPECIFIC ROUTES BEFORE /:id
+    // ══════════════════════════════
 
-    // create registration — any logged in user
+    // create registration
     app.post("/registrations", verifyToken, async (req, res) => {
       const registration = req.body;
       const existing = await registrationsCollection.findOne({
@@ -207,7 +237,7 @@ async function run() {
       res.send(result);
     });
 
-    // get registrations — logged in user only
+    // get registrations by participant email
     app.get("/registrations", verifyToken, async (req, res) => {
       const { participantEmail } = req.query;
       const query = participantEmail ? { participantEmail } : {};
@@ -215,8 +245,21 @@ async function run() {
       res.send(result);
     });
 
-    // Registration payment intent
-    // ── get single registration by ID
+    // MUST be before /registrations/:id
+    // get registrations by organizer email
+    app.get("/registrations/organizer", verifyToken, async (req, res) => {
+      const { organizerEmail } = req.query;
+      if (req.user?.email !== organizerEmail) {
+        return res.status(403).send({ message: "Forbidden" });
+      }
+      const result = await registrationsCollection
+        .find({ organizerEmail })
+        .sort({ joinedAt: -1 })
+        .toArray();
+      res.send(result);
+    });
+
+    // get single registration by ID — /:id AFTER specific routes
     app.get("/registrations/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
       const result = await registrationsCollection.findOne({
@@ -225,7 +268,7 @@ async function run() {
       res.send(result);
     });
 
-    // ── cancel registration
+    // cancel registration — participant cancels
     app.patch("/registrations/:id/cancel", verifyToken, async (req, res) => {
       const { id } = req.params;
       const result = await registrationsCollection.updateOne(
@@ -235,7 +278,7 @@ async function run() {
       res.send(result);
     });
 
-    // ── mark registration as paid
+    // mark registration as paid — after Stripe payment
     app.patch("/registrations/:id/pay", verifyToken, async (req, res) => {
       const { id } = req.params;
       const { paymentStatus, paymentIntentId } = req.body;
@@ -253,31 +296,85 @@ async function run() {
       res.send(result);
     });
 
-    // ── create Stripe PaymentIntent
+    // confirm registration — organizer confirms
+    app.patch(
+      "/registrations/:id/confirm",
+      verifyToken,
+      verifyOrganizer,
+      async (req, res) => {
+        const { id } = req.params;
+        const result = await registrationsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              status: "confirmed",
+              confirmedAt: new Date().toISOString(),
+            },
+          },
+        );
+        res.send(result);
+      },
+    );
+
+    // reject registration — organizer rejects + frees seat
+    app.patch(
+      "/registrations/:id/reject",
+      verifyToken,
+      verifyOrganizer,
+      async (req, res) => {
+        const { id } = req.params;
+        const { campId } = req.body;
+
+        // 1 — mark as cancelled
+        const regResult = await registrationsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              status: "cancelled",
+              cancelledAt: new Date().toISOString(),
+              cancelledBy: "organizer",
+            },
+          },
+        );
+
+        // 2 — free the seat (decrement, min 0)
+        if (campId) {
+          await campsCollection.updateOne(
+            { _id: new ObjectId(campId), participantCount: { $gt: 0 } },
+            { $inc: { participantCount: -1 } },
+          );
+        }
+
+        res.send(regResult);
+      },
+    );
+
+    // ══════════════════════════════
+    // PAYMENTS
+    // ══════════════════════════════
+
+    // create Stripe PaymentIntent
     app.post("/create-payment-intent", verifyToken, async (req, res) => {
       const { amountInCents } = req.body;
-
       if (!amountInCents || amountInCents < 50) {
         return res.status(400).send({ message: "Invalid amount" });
       }
-
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amountInCents,
         currency: "usd",
         payment_method_types: ["card"],
       });
-
       res.send({ clientSecret: paymentIntent.client_secret });
     });
 
-    // ── save payment record
+    // save payment record
     app.post("/payments", verifyToken, async (req, res) => {
       const payment = req.body;
       const result = await paymentsCollection.insertOne(payment);
       res.send(result);
     });
 
-    // ── get payments by participant
+    // get payments by participant
     app.get("/payments", verifyToken, async (req, res) => {
       const { participantEmail } = req.query;
       const query = participantEmail ? { participantEmail } : {};
@@ -285,14 +382,18 @@ async function run() {
       res.send(result);
     });
 
-    // ── post feedback
+    // ══════════════════════════════
+    // FEEDBACK
+    // ══════════════════════════════
+
+    // post feedback
     app.post("/feedback", verifyToken, async (req, res) => {
       const feedback = req.body;
       const result = await feedbackCollection.insertOne(feedback);
       res.send(result);
     });
 
-    // ── get all feedback (for homepage)
+    // get all feedback — public (for homepage)
     app.get("/feedback", async (req, res) => {
       const result = await feedbackCollection.find().toArray();
       res.send(result);
