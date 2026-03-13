@@ -47,9 +47,18 @@ async function run() {
   try {
     await client.connect();
 
-    const usersCollection         = client.db("medivoDb").collection("users");
-    const campsCollection         = client.db("medivoDb").collection("camps");
-    const registrationsCollection = client.db("medivoDb").collection("registrations");
+    // all collections 
+    const usersCollection = client.db("medivoDb").collection("users");
+    const campsCollection = client.db("medivoDb").collection("camps");
+    const registrationsCollection = client
+      .db("medivoDb")
+      .collection("registrations");
+    const paymentsCollection = client.db("medivoDb").collection("payments");
+    const feedbackCollection = client.db("medivoDb").collection("feedback");
+
+    // npm install stripe
+    const Stripe = require("stripe");
+    const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
     // ── verifyOrganizer INSIDE run() so it can access usersCollection
     const verifyOrganizer = async (req, res, next) => {
@@ -105,15 +114,20 @@ async function run() {
     });
 
     // set user role
-    app.patch("/users/role/:email", verifyToken, verifyOrganizer, async (req, res) => {
-      const { email } = req.params;
-      const { role } = req.body;
-      const result = await usersCollection.updateOne(
-        { email },
-        { $set: { role } }
-      );
-      res.send(result);
-    });
+    app.patch(
+      "/users/role/:email",
+      verifyToken,
+      verifyOrganizer,
+      async (req, res) => {
+        const { email } = req.params;
+        const { role } = req.body;
+        const result = await usersCollection.updateOne(
+          { email },
+          { $set: { role } },
+        );
+        res.send(result);
+      },
+    );
 
     // ── CAMPS ──
 
@@ -146,7 +160,7 @@ async function run() {
       const updates = req.body;
       const result = await campsCollection.updateOne(
         { _id: new ObjectId(id) },
-        { $set: updates }
+        { $set: updates },
       );
       res.send(result);
     });
@@ -170,7 +184,7 @@ async function run() {
       }
       const result = await campsCollection.updateOne(
         { _id: new ObjectId(id) },
-        { $inc: { participantCount: 1 } }
+        { $inc: { participantCount: 1 } },
       );
       res.send(result);
     });
@@ -181,11 +195,13 @@ async function run() {
     app.post("/registrations", verifyToken, async (req, res) => {
       const registration = req.body;
       const existing = await registrationsCollection.findOne({
-        campId:           registration.campId,
+        campId: registration.campId,
         participantEmail: registration.participantEmail,
       });
       if (existing) {
-        return res.status(400).send({ message: "You have already joined this camp" });
+        return res
+          .status(400)
+          .send({ message: "You have already joined this camp" });
       }
       const result = await registrationsCollection.insertOne(registration);
       res.send(result);
@@ -196,6 +212,89 @@ async function run() {
       const { participantEmail } = req.query;
       const query = participantEmail ? { participantEmail } : {};
       const result = await registrationsCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    // Registration payment intent
+    // ── get single registration by ID
+    app.get("/registrations/:id", verifyToken, async (req, res) => {
+      const { id } = req.params;
+      const result = await registrationsCollection.findOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
+    // ── cancel registration
+    app.patch("/registrations/:id/cancel", verifyToken, async (req, res) => {
+      const { id } = req.params;
+      const result = await registrationsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status: "cancelled" } },
+      );
+      res.send(result);
+    });
+
+    // ── mark registration as paid
+    app.patch("/registrations/:id/pay", verifyToken, async (req, res) => {
+      const { id } = req.params;
+      const { paymentStatus, paymentIntentId } = req.body;
+      const result = await registrationsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            paymentStatus,
+            paymentIntentId,
+            status: "confirmed",
+            paidAt: new Date().toISOString(),
+          },
+        },
+      );
+      res.send(result);
+    });
+
+    // ── create Stripe PaymentIntent
+    app.post("/create-payment-intent", verifyToken, async (req, res) => {
+      const { amountInCents } = req.body;
+
+      if (!amountInCents || amountInCents < 50) {
+        return res.status(400).send({ message: "Invalid amount" });
+      }
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amountInCents,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+
+      res.send({ clientSecret: paymentIntent.client_secret });
+    });
+
+    // ── save payment record
+    app.post("/payments", verifyToken, async (req, res) => {
+      const payment = req.body;
+      const result = await paymentsCollection.insertOne(payment);
+      res.send(result);
+    });
+
+    // ── get payments by participant
+    app.get("/payments", verifyToken, async (req, res) => {
+      const { participantEmail } = req.query;
+      const query = participantEmail ? { participantEmail } : {};
+      const result = await paymentsCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    // ── post feedback
+    app.post("/feedback", verifyToken, async (req, res) => {
+      const feedback = req.body;
+      const result = await feedbackCollection.insertOne(feedback);
+      res.send(result);
+    });
+
+    // ── get all feedback (for homepage)
+    app.get("/feedback", async (req, res) => {
+      const result = await feedbackCollection.find().toArray();
       res.send(result);
     });
 
