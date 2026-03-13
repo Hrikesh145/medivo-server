@@ -3,7 +3,12 @@ const admin = require("firebase-admin");
 const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-const serviceAccount = require("./serviceAccountKey.json");
+
+
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
+  "utf8",
+);
+const serviceAccount = JSON.parse(decoded);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -45,7 +50,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
 
     // ── collections
     const usersCollection = client.db("medivoDb").collection("users");
@@ -243,7 +248,6 @@ async function run() {
       res.send(result);
     });
 
-
     // get registrations by organizer email
     app.get(
       "/registrations/organizer",
@@ -399,7 +403,7 @@ async function run() {
       res.send(result);
     });
 
-    console.log("connected to MongoDB ✓");
+    // console.log("connected to MongoDB ✓");
   } catch (err) {
     console.error(err);
   }
